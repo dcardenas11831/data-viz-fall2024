@@ -1,0 +1,383 @@
+---
+title: "PPOL 5202: Problem Set 1"
+author: "Daniel Cardenas"
+format: html
+editor: visual
+execute: 
+  warning: false
+  message: false
+---
+
+*Topics covered*: ggplot2 for EDA; automating ggplot2 graphics generation; ML/statistics model exploration
+
+## **Question 1: Data Cleaning to Prepare for Data Viz**(12 points)
+
+```{r, message=FALSE,warning=FALSE}
+#| echo: True
+## Import packages and datasets
+library(openxlsx)
+library(tidyverse)
+library(ggalluvial)
+
+hc <- read.xlsx("https://mpdc.dc.gov/sites/default/files/dc/sites/mpdc/publication/attachments/Hate%20Crimes%20Open%20Data_16.xlsx")
+head(hc)
+```
+
+```{r}
+
+category_counts <- table(hc$Type.of.Hate.Bias)
+categories_to_keep <- names(category_counts[category_counts >= 100])
+hc1 <- hc[hc$Type.of.Hate.Bias %in% categories_to_keep, ]
+dim(hc1)
+```
+
+```{r}
+table(hc1$District)
+```
+
+I need to clean the 2D category and delete the Unk
+
+```{r}
+remove_extra_spaces <- function(x) {
+  trimws(gsub("\\s+", " ", x))
+}
+
+hc1$district_clean <- remove_extra_spaces(hc1$District)
+hc1 <- hc1 %>% filter(district_clean != "Unk") # Deleting the unknown observation
+table(hc1$district_clean)
+```
+
+```{r}
+table(hc1$Targeted.Group)
+```
+
+```{r}
+hc1$tg_clean <- remove_extra_spaces(hc1$Targeted.Group)
+table(hc1$tg_clean)
+```
+
+```{r}
+get_census_group <- function(x) {
+  white = c("White", "Ukranian", "Russian", "Israeli", "Middle Eastern", "Arab/Middle Eastern", "Iranian", "Lebanese", "Palestinian", "Turkish")
+  black = c("African", "Black", "Black/African", "Ethiopian", "Jamaican", "Oromo")
+  latino = c("Colombian", "Hispanic", "Latino/Hispanic", "Mexican")
+  am_indian = c("Indian")
+  asian = c("Asian", "Chinese", "Japanese", "Pakistani", "Taiwanese")
+  # native_hi = c()
+  unknown = c("Multiple", "Non-European", "Non-Palestinian", "Unknown", "Unspecified", "Jewish", "Arab/Middle Eastern or Jewish")
+  
+  result <- character(length(x))  # Initialize result vector
+  
+  result[x %in% white] <- "White"
+  result[x %in% black] <- "Black"
+  result[x %in% latino] <- "Latino"
+  result[x %in% asian] <- "Asian"
+  result[x %in% am_indian] <- "American Indian"
+  result[x %in% unknown | is.na(result) | result == ""] <- "Unknown"
+  
+  return(result)
+}
+
+hc1$tg_census <- get_census_group(hc1$tg_clean)
+table(hc1$tg_census)
+```
+
+The classification was done mostly on the basis of the mapping between geography and the categories. Characteristics such as religion (e.g. being jewish) were assign to "unknown". Also to this later category was assigned all non clear classifications and missing values.
+
+```{r}
+paste(paste("Original dataset:", nrow(hc), "observations"))
+hc_alltargets <- hc1
+print(paste("All targets dataset:", nrow(hc_alltargets), "observations"))
+hc_censustargets <- hc1 %>% filter(tg_census != "Unknown")
+print(paste("Census targets dataset:", nrow(hc_censustargets), "observations"))
+```
+
+In comparison with the Github issue this version has more observations, which could be because of discrepancies in how to deal with the white category. Here I opted to include the Middle Eastern and Arabs as White because they fit the general definitions of the Census and people that speak Arabic come from the Middle East and North African countries. Actually, this discrepancies in which races are considered white is a subject of debate (<https://www.npr.org/2022/02/17/1079181478/us-census-middle-eastern-white-north-african-mena>).
+
+## Question 2: Exploratory Data Visualization of Hate Crimes data (15 points)
+
+#### **Plot 1: Bar Plot (hc1)**
+
+```{r, message=FALSE,warning=FALSE}
+#| echo: true
+
+# Step 1: Summarise the data
+hc_counts <- hc_alltargets %>%
+  group_by(district_clean, Type.of.Hate.Bias) %>%
+  summarise(count_ = n(), .groups = 'drop')
+
+# Plot 1: Bar Plot
+ggplot(hc_counts, aes(x = district_clean, y = count_, fill = Type.of.Hate.Bias)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = count_), position = position_dodge(width = 0.9), vjust = -0.5, color = "black", size = 3) + 
+  scale_fill_brewer(palette = "Set3") + 
+  labs(title = "Hate Crimes by District and Bias Type in DC",
+       x = "District",
+       y = "Count of Records",
+       fill = "Type of Hate Bias") +
+  theme_minimal() +
+  theme(legend.position = "right") +
+  guides(fill = guide_legend(ncol = 1))  
+
+
+
+```
+
+What immediately pops out are district 2 and 3. The former with very high rates of ethnicity and race based crimes and the later with a large number of sexual orientation hate crimes. It is interesting that District 3 seems to comprise the most night-life neighborhoods in the city and District 2 has the areas with the highest income.
+
+#### **Plot 2: Alluvial Flow Diagram (hc2)**
+
+```{r}
+#| echo: true
+
+#Find the district with the max number of crimes
+hc_counts <- hc_censustargets %>%
+  group_by(district_clean) %>%
+  summarise(count_ = n(), .groups = 'drop') %>%
+  arrange(desc(count_)) 
+
+highest_d = hc_counts %>% slice(1) %>% pull(district_clean)
+highest_d
+```
+
+```{r}
+hc_plot <- hc_censustargets %>% 
+  filter(district_clean == highest_d) %>%
+  group_by(Type.of.Hate.Bias, tg_census) %>%
+  summarise(count_ = n(), .groups = 'drop')
+
+# Plot 2: Alluvial Flow Diagram
+ggplot(hc_plot, aes(axis1 = Type.of.Hate.Bias, axis2 = tg_census, y = count_)) +
+  geom_alluvium(aes(fill = tg_census), width = 1/12) +
+  geom_stratum(alpha = .25, width = 1/12, color = "grey") +
+  geom_text(stat = "stratum", aes(label = after_stat(stratum)), size=3.3) +
+  scale_x_discrete(limits = c("Type of Hate Bias", "Targeted Group"), 
+                   expand = c(0.1, 0.1)) +
+  labs(title = "Flow of Hate Crimes by Bias Type and Targeted Group", 
+       y = "Number of Crimes",
+       fill = "Targeted Group") +
+  theme_minimal()
+```
+
+Latino, American Indian and Asian all come from ethnicity or national origin (with the exception of a couple of Asian observations), while race is mostly focus on white and black. This raises questions about the usage of this categories by the Census and how the many cases in white might be making it more difficult to identify hate crimes due to ethnicity.
+
+#### **Plot 3: Square Area Chart (hc1)**
+
+```{r}
+#| echo: true
+hc_plot <- hc_alltargets %>% 
+  group_by(Type.of.Hate.Bias) %>%
+  summarise(perc_ = round(n()/nrow(hc_alltargets) * 100), .groups = 'drop') %>%
+  arrange(desc(perc_)) 
+
+sq_values = data.frame(expand.grid(1:10, 1:10))
+
+sq_values$hate_bias = c(rep(as.vector(hc_plot$Type.of.Hate.Bias), as.vector(hc_plot$perc_)))
+ggplot(sq_values, aes(x = Var1, y = Var2, fill = hate_bias)) +
+  geom_tile(color = "white",
+            lwd = 1.5,
+            linetype = 1) +
+  coord_fixed() +
+  labs(title = "Distribution of Types of Bias in Hate Crimes", 
+       y = "", x = "",
+       fill = "Type of Hate Bias") +
+  theme_void()
+```
+
+The most prevalent type of hate crime is by sexual orientation. However, one might make this 4 categories into just 2 (race and ethnicity v sexual orientation and gender identity) and the sum of both will be roughly the same. In other words, one out of every 2 hate crimes will belong to one of those grand categories.
+
+## Question 3: Automating quarto reports (15 points)
+
+See other files in submission.
+
+## Question 4: Model Visualizations - Machine Learning (10 points)
+
+```{r, message=FALSE,warning=FALSE}
+#| echo: true
+
+library(randomForest)
+library(lubridate)
+library(tidyverse)
+
+tweets <- read.csv("Twitter.csv")
+tweets$created_at <- ymd_hms(tweets$created_at)
+tweets$year <- year(tweets$created_at)
+
+
+# Filter out neutral stances
+tweets_filtered <- tweets %>%
+  filter(stance != "neutral") %>%
+  mutate(stance_binary = ifelse(stance == "denier", 1, 0))  # 1 = denier, 0 = believer
+
+
+# Convert it into binary variables
+tweets_filtered$stance_binary <- as.factor(tweets_filtered$stance_binary)
+
+# Remove any na values
+tweets_filtered <- na.omit(tweets_filtered)
+
+# Convert categorical variables into factors
+tweets_filtered$aggressiveness <- as.factor(tweets_filtered$aggressiveness)
+tweets_filtered$gender <- as.factor(tweets_filtered$gender)
+
+# Splitting the data into training and testing sets (80% train, 20% test)
+set.seed(123)  
+train_index <- sample(1:nrow(tweets_filtered), 0.8 * nrow(tweets_filtered))
+train_data <- tweets_filtered[train_index, ]
+test_data <- tweets_filtered[-train_index, ]
+
+# Fit the Random Forest model
+rf_model <- randomForest(stance_binary ~ sentiment + aggressiveness + gender + temperature_avg + year, data = train_data, ntree = 100, importance = TRUE)
+
+## your code here
+
+# Print model summary
+print("Train performance")
+print(rf_model)
+
+
+
+```
+
+```{r}
+# Getting the predictions on the test data and calculating the confusion matrix
+library(caret)
+print("Test performance")
+
+rf_predictions <- predict(rf_model, test_data)
+confusionMatrix(test_data$stance_binary, rf_predictions)
+
+```
+
+```{r}
+
+# Function to calculate TPR and FPR
+calculate_rates <- function(actual, predicted, threshold) {
+  predicted_class <- ifelse(predicted >= threshold, 1, 0)
+  tp <- sum(actual == 1 & predicted_class == 1)
+  fp <- sum(actual == 0 & predicted_class == 1)
+  fn <- sum(actual == 1 & predicted_class == 0)
+  tn <- sum(actual == 0 & predicted_class == 0)
+  
+  tpr <- tp / (tp + fn)
+  fpr <- fp / (fp + tn)
+  
+  return(c(tpr, fpr))
+}
+
+# Generate ROC curve points
+generate_roc_points <- function(actual, predicted, thresholds) {
+  roc_points <- sapply(thresholds, function(thresh) {
+    calculate_rates(actual, predicted, thresh)
+  })
+  return(t(roc_points))
+}
+
+# Calculating the ROC
+thresholds <- seq(0, 1, by = 0.01)
+test_data$predictions = rf_predictions
+predicted_probs = predict(rf_model, test_data, type="prob") # To get the probabilities rather than the categories
+roc_points <- generate_roc_points(test_data$stance_binary, predicted_probs, thresholds)
+
+roc_df <- data.frame(FPR = roc_points[,2], TPR = roc_points[,1])
+
+# Plot the ROC curve
+ggplot(roc_df, aes(x = FPR, y = TPR)) +
+  geom_line(color="#fb8072") +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray") +
+  ggtitle("ROC Curve") +
+  theme_minimal() +
+  labs(x = "False Positive Rate", y = "True Positive Rate")
+
+
+```
+
+```{r}
+# Get importance values as a data frame
+imp = as.data.frame(importance(rf_model))
+imp = cbind(vars=rownames(imp), imp)
+imp = imp[order(imp$MeanDecreaseGini),]
+imp$vars = factor(imp$vars, levels=unique(imp$vars))
+
+ggplot(imp, aes(x = vars, y = MeanDecreaseGini, fill = vars)) +
+  geom_bar(stat = "identity", position = "stack") +
+  geom_text(aes(label = sprintf("%.2f", MeanDecreaseGini)), 
+            position = position_stack(vjust = 0.5), 
+            color = "black", size = 3) + 
+  scale_fill_brewer(palette = "Set3") + 
+  labs(title = "Feature Importance by Mean Decrease Gini",
+       x = "Feature",
+       y = "Mean Decrease Gini") +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  coord_flip()
+```
+
+The most important feature for the classification is the sentiment followed by the temperature. These two features are by far the most important for the tree.
+
+On the other hand, this tree is not a very good classifier, its ROC curve is very close to the random line. Which means that its classification is not an improvement from a coin toss.
+
+## Question 5: Model Visualizations - Statistics (12 points)
+
+```{r, message=FALSE,warning=FALSE}
+#| echo: true
+
+library(caret)
+
+# Creating the model with the data defined in the previous point
+# In order to compare between the profiles it is necessary to add the year to the model
+glm_model <- glm(stance_binary ~ gender + aggressiveness + year, 
+             data = tweets_filtered, 
+             family = binomial(link = "logit"))
+
+summary(glm_model)
+
+```
+
+```{r}
+
+# Dataframe with all combinations of gender, aggressiveness, and year
+predict_data <- expand.grid(
+  gender = c("female", "male"),
+  aggressiveness = c("aggressive", "not aggressive"),
+  year = unique(tweets_filtered$year)
+)
+
+# Calculate predicted probabilities
+predicted_val <- predict(glm_model, newdata = predict_data, se.fit = TRUE, type = "response")
+
+
+data_topredict_wpred <- predict_data %>%
+            mutate(predict_prob = predicted_val$fit, 
+                   predict_se = predicted_val$se.fit,
+                   lower = predict_prob - 1.96*predict_se,
+                   upper = predict_prob + 1.96*predict_se)
+
+data_topredict_wpred = data_topredict_wpred %>%
+  select(gender, aggressiveness, year, predict_prob, lower, upper) 
+
+data_topredict_wpred
+
+```
+
+```{r}
+ggplot(data_topredict_wpred, aes(x = year, y = predict_prob, color = interaction(gender, aggressiveness))) +
+  geom_point() +
+  geom_errorbar(aes(ymin = lower, 
+                    ymax = upper),
+                width = 0.1) +
+  scale_color_manual(values = c("#055864", "#8B2635", "#03859A", "#fb8072")) +
+  labs(title = "Predicted Probability of Denial Stance Over Time",
+       x = "", 
+       y = "Probability of Denial Stance",
+       color = "Profile") +
+  theme_minimal()
+```
+
+The first thing to notice is that the probability of a tweet denying that humans have an influence in climate change is declining over the years. This could be due to the fact that later years have more data (as seen in previous points and suggested by the CI of 2006 and 2007 vs 2008 and 2009) and in the early ones it is more difficult to see a pattern.
+
+Also, the probability of having a denial stance is higher on the aggressive tweets, regardless of the gender of the author. This suggest that people that deny the effect humnas have on climate change express their views in a more aggressive matter.
+
+Finally, since 2008 there is a difference in gender on having a denial stance. Even tough the differences remain bigger in aggressiveness among females (the ones that write aggressive tweets are related with a higher probability of having a denial stance), this group has a lower probability of having a denial stance than their male counterparts of the same aggressive tendency.
+
+Then, to analyse the tweets it is necessary to keep in mind that the time they are written matters, that there is a gender component to it and that denier attitudes seem to be related with aggressivess.

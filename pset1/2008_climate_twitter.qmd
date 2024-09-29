@@ -1,0 +1,166 @@
+---
+title: "Yearly Twitter Sentiment Analysis on Climate"
+author: "Daniel Cardenas"
+format: html
+editor: visual
+params:
+  year: 2009
+---
+
+# How was `r params$year` in climate sentiment compared to the previous year?
+
+```{r}
+#| echo: false
+#| output: false 
+
+library(tidyverse)
+library(scales)
+
+twitter = read.csv("./Twitter.csv")
+
+twitter$year = as.integer(substr(twitter$created_at, 1, 4))
+
+twitter <- twitter %>% 
+  filter(year == params$year | year == params$year - 1) %>%
+  mutate(year_current = year == params$year)
+
+total_tweets = nrow(twitter)
+current_tweets = nrow(filter(twitter, twitter$year==params$year))
+past_tweets = nrow(filter(twitter, twitter$year==params$year-1))
+past_year = params$year - 1
+current_year = params$year
+```
+
+The universe of tweets for this analysis is `r comma(total_tweets)`.
+
+Of those, `r comma(current_tweets)` are from `r current_year` and `r comma(past_tweets)` are from `r past_year`.
+
+## Sentiment
+
+The first analysis refers to the sentiment on the tweets regarding climate change for each year. The sentiment is how likely it is that positive (towards 1) or negative (towards -1) words were used in an average tweet.
+
+```{r}
+#| echo: false
+#| output: true 
+
+mean_sentiment_current = mean(filter(twitter, twitter$year == params$year)$sentiment)
+mean_sentiment_past = mean(filter(twitter, twitter$year == params$year-1)$sentiment)
+
+ggplot(twitter, aes(x = factor(year), y = sentiment, fill = factor(year))) +
+  geom_violin() +
+  geom_boxplot(width=0.1) +
+  scale_fill_brewer(palette = "Set3") + 
+  labs(title = "Sentiment Analysis Between Years",
+       x = "Year",
+       y = "Sentiment Score") +
+  theme_minimal() +
+  guides(fill="none")
+```
+
+This graph presents a visual description of the distribution of the sentiment scores for the tweets between the two years. The mean for `r current_year` is `r round(mean_sentiment_current, 3)` and for the previous year, `r past_year`, the mean is `r round(mean_sentiment_past, 3)`.
+
+## Agressiveness
+
+The second analysis refers to the aggressiveness of the tweet. In particular, we want to see if over time the conversation has gone more aggressive regarding climate change.
+
+```{r}
+#| echo: false
+#| output: true 
+
+plot_df <- twitter %>%
+  group_by(year) %>%
+  mutate(total_per_year = n()) %>%
+  ungroup() %>%
+  group_by(year, aggressiveness) %>%
+  summarise(
+    count_ = n(),
+    perc_ = count_ / first(total_per_year) * 100,
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(perc_)) 
+
+sum_aggressive_current = sum(filter(plot_df, plot_df$year == params$year & plot_df$aggressiveness=="aggressive")$count_)
+sum_aggressive_past = sum(filter(plot_df, plot_df$year == params$year-1 & plot_df$aggressiveness=="aggressive")$count_)
+
+# Plot 1: Bar Plot
+ggplot(plot_df, aes(x = factor(year), y = perc_, fill = aggressiveness)) +
+  geom_bar(stat = "identity", position = "stack") +
+  geom_text(aes(label = sprintf("%s\n%.2f%%", aggressiveness, perc_)), 
+            position = position_stack(vjust = 0.5), 
+            color = "black", size = 4) + 
+  scale_fill_manual(values = c("#fb8072", "#ffffb3")) +
+  labs(title = "Aggressiveness Percentages by Year",
+       x = "",
+       y = "Percentage",
+       fill = "Aggressiveness") +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  coord_flip()
+
+```
+
+In absolute terms, in `r past_year` there were `r comma(sum_aggressive_past)` tweets classified as aggressive. In contrast, in `r current_year` there were `r comma(sum_aggressive_current)`.
+
+## Stance
+
+The third is the stance that each tweet defends, either if it is a believer that humans are responsible for climate change, a denier or if it is a neutral tweet.
+
+```{r}
+#| echo: false
+#| output: true 
+
+
+df_plot1 <- twitter %>%
+  group_by(year) %>%
+  mutate(total_per_year = n()) %>%
+  group_by(year, stance) %>%
+  summarise(
+    count_ = n(),
+    percentage = count_ / first(total_per_year) * 100,
+    .groups = 'drop'
+  )
+
+most_common_stance_info <- df_plot1 %>%
+  group_by(year) %>%
+  slice_max(order_by = count_, n = 1) %>%
+  ungroup() %>%
+  slice_max(order_by = count_, n = 1)
+
+
+ggplot(df_plot1, aes(x = factor(year), y = count_, fill = stance)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = paste0(comma(count_), "\n(", sprintf("%.1f%%", percentage), ")")),
+            position = position_dodge(width = 0.9), 
+            vjust = -0, 
+            color = "black", 
+            size = 3) + 
+  scale_fill_brewer(palette = "Set3") + 
+  scale_y_continuous(labels = comma) +
+  labs(title = "Classification of tweets according to stance",
+       x = "",
+       y = "Count of Tweets",
+       fill = "Stance") +
+  theme_minimal() +
+  theme(legend.position = "right") +
+  guides(fill = guide_legend(ncol = 1)) +
+  coord_cartesian(clip = "off")
+```
+
+Between the two years the category with the most tweets was **`r most_common_stance_info$stance`** in `r most_common_stance_info$year` with a total of `r comma(most_common_stance_info$count_)` tweets that were `r round(most_common_stance_info$percentage, 2)`% of the total tweets of that year.
+
+## Summary
+
+```{r}
+#| echo: false
+#| output: true 
+
+higher_lower_sent = ifelse(mean_sentiment_current<=mean_sentiment_past, "lower", "higher")
+higher_lower_aggr = ifelse(sum_aggressive_current<=sum_aggressive_past, "lower", "higher")
+higher_lower_stan = ifelse(most_common_stance_info$year!=params$year, "lower", "higher")
+```
+
+We see that, for these statistics:
+
+-   `r current_year` has **`r higher_lower_sent`** average tweet sentiment than the previous year.
+-   `r current_year` has **`r higher_lower_aggr`** number of aggressive tweets than the previous year.
+-   `r current_year` has **`r higher_lower_stan`** number of tweets classified as "`r most_common_stance_info$stance`" than the previous year.
